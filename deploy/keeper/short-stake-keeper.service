@@ -1,0 +1,39 @@
+# systemd unit for the ShortStake liquidation keeper. Install (see README.md):
+#   sudo cp deploy/keeper/short-stake-keeper.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now short-stake-keeper
+# Logs: journalctl -u short-stake-keeper -f
+[Unit]
+Description=ShortStake liquidation keeper
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=keeper
+Group=keeper
+WorkingDirectory=/home/keeper/short-stake001
+# Same as `npm run keeper`, minus npm (which wants to write ~/.npm, read-only under ProtectHome).
+# Reads .env.keeper from WorkingDirectory.
+ExecStart=/home/keeper/short-stake001/node_modules/.bin/tsx --env-file-if-exists=.env.keeper app/src/keeper/main.ts
+# Crash or RPC outage: restart, but don't hammer a broken RPC.
+Restart=always
+RestartSec=10
+# systemctl stop sends SIGTERM; the keeper finishes its current step and exits.
+KillSignal=SIGTERM
+TimeoutStopSec=90
+
+# Hardening: the keeper only needs network access and its working directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/keeper/short-stake001
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

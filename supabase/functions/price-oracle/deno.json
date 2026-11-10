@@ -1,0 +1,6 @@
+{
+  "imports": {
+    "@solana/kit": "https://esm.sh/@solana/kit@8.4.0?bundle&target=denonext",
+    "@supabase/supabase-js": "npm:@supabase/supabase-js@2.117.3"
+  }
+}

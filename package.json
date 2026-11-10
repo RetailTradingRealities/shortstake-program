@@ -1,0 +1,54 @@
+{
+  "private": true,
+  "workspaces": [
+    "app/frontend"
+  ],
+  "scripts": {
+    "generate:client": "node scripts/generate-client.mjs && node scripts/sync-indexer-decoders.mjs",
+    "sync:indexer": "node scripts/sync-indexer-decoders.mjs",
+    "test:indexer": "tsx scripts/test-indexer-core.mts",
+    "test:monitor": "tsx scripts/test-monitor-core.mts",
+    "test:oracle": "tsx scripts/test-price-oracle-core.mts",
+    "oracle:check": "tsx --env-file=.env scripts/check-price-sources.mts",
+    "oracle:live": "tsx scripts/check-price-oracle.mts",
+    "surfpool:e2e": "tsx --env-file=.env app/src/scripts/surfpool/oracle-e2e.ts",
+    "surfpool:liquidate": "tsx app/src/scripts/surfpool/liquidate-expiry.ts",
+    "surfpool:pyth": "tsx app/src/scripts/surfpool/pyth-e2e.ts",
+    "admin:config": "tsx app/src/scripts/admin-init-config.ts",
+    "admin:vault": "tsx app/src/scripts/admin-init-global-vault.ts",
+    "squads:rehearsal": "tsx app/src/scripts/squads-rehearsal.ts",
+    "squads:export": "tsx app/src/scripts/squads-export.ts",
+    "admin:extend": "tsx app/src/scripts/extend-program.ts",
+    "admin:mainnet": "tsx app/src/scripts/admin-mainnet.ts",
+    "test:keeper": "tsx scripts/test-liquidation-plan.mts",
+    "surfpool:flash": "tsx --env-file=.env app/src/scripts/surfpool/flash-liquidate.ts",
+    "test:indexer-sql": "tsx scripts/test-indexer-sql.mts",
+    "test:consent": "tsx scripts/test-wallet-consent.mts",
+    "backfill:metadata": "tsx scripts/backfill-market-metadata.mts",
+    "keeper": "tsx --env-file-if-exists=.env.keeper app/src/keeper/main.ts",
+    "surfpool:keeper": "tsx --env-file=.env app/src/scripts/surfpool/keeper-e2e.ts",
+    "surfpool:h01": "tsx --env-file=.env app/src/scripts/surfpool/h01-keeper.ts",
+    "surfpool:upgrade": "tsx app/src/scripts/surfpool/upgrade-fork.ts",
+    "surfpool:site": "cd app/frontend && VITE_SOLANA_CLUSTER=mainnet npx -y vite-node@2.1.9 --config scripts/vite.fork.config.ts scripts/fork-site-e2e.ts"
+  },
+  "dependencies": {
+    "@jup-ag/lend": "0.4.0",
+    "@solana-program/address-lookup-table": "0.15.0",
+    "@solana-program/system": "^0.15.0",
+    "@solana-program/token": "^0.17.0",
+    "@solana/compat": "8.4.0",
+    "@solana/kit": "^8.4.0",
+    "cross-fetch": "^4.1.0"
+  },
+  "devDependencies": {
+    "@codama/nodes-from-anchor": "^1.5.6",
+    "@codama/renderers-js": "^2.5.0",
+    "@electric-sql/pglite": "^0.5.10",
+    "@sqds/multisig": "2.1.4",
+    "@types/bn.js": "^5.2.0",
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.2"
+  }
+}

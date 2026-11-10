@@ -1,0 +1,34 @@
+use anchor_lang::prelude::*;
+use crate::pyth_feeds_list::{OracleFlag, PYTH_ALLOWED_FEEDS};
+
+pub fn is_pyth_supported(token_mint: Pubkey) -> OracleFlag {
+    for (mint, _pyth_feed) in PYTH_ALLOWED_FEEDS.iter() {
+        if *mint == token_mint {
+            return OracleFlag::Pyth;
+        }
+    }
+    OracleFlag::Custom
+}
+
+
+
+
+/* 
+market_vault.expected_oracle_feed = if is_pyth_supported(token_mint) {
+    OracleFlag::Pyth
+} else {
+    OracleFlag::Custom
+};
+
+
+
+let price = match market_vault.expected_oracle_feed {
+    OracleFlag::Pyth => {
+        // Require and validate the correct Pyth feed
+    }
+    OracleFlag::Custom => {
+        // Require and validate the custom oracle PDA
+    }
+};
+
+*/
