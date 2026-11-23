@@ -35,10 +35,10 @@ later upgrade. Once it lands, explorers will show that the on-chain program matc
 | --- | --- |
 | `programs/short-stake001/` | The Anchor program (Rust) and its tests |
 | `clients/js/` | TypeScript client generated from the program's IDL (Codama, `@solana/kit`) |
-| `app/src/oracle/` | Signed-price and Pyth helpers used by the client and the keeper |
+| `app/src/oracle/` | Signed-price helpers used by the client and the keeper |
 | `app/src/instructions/` | Transaction builders, including the keeper's flash-loan liquidation |
 | `app/src/keeper/`, `deploy/keeper/` | The liquidation keeper and how to run it on a Linux server |
-| `supabase/functions/price-oracle/` | The oracle that signs prices for tokens not on the Pyth list |
+| `supabase/functions/price-oracle/` | The oracle that signs every market's prices |
 
 ## The program
 
@@ -53,12 +53,14 @@ Admin instructions (`initialize`, `update_config`, `propose_authority` / `accept
 `set_paused`) are restricted to the config authority. A pause only stops new stakes and borrows;
 closing, unstaking and liquidating always work.
 
-**Prices.**
-- **Pyth-listed tokens** (`programs/short-stake001/src/pyth_feeds_list.rs`) are read from Pyth's
-  sponsored price accounts.
-- **All other tokens** need a price signed by the oracle signer, verified on chain with an Ed25519
-  instruction placed directly before the program instruction. Each signed price is for one
-  program, mint and action, and is valid for 60 seconds.
+**Prices.** Every market is priced by the oracle signer: a signed price, verified on chain with an
+Ed25519 instruction placed directly before the program instruction. Each signed price is for one
+program, mint and action. The program accepts it for 60 seconds; liquidation prices are signed
+45 seconds in the past, so they are usable for only about 15 (see the oracle's README).
+
+Until 2026-11-22, tokens on a Pyth list were priced from Pyth's sponsored push feeds instead. Pyth
+stopped updating its meme-token feeds, so the program now ignores the stored `expected_oracle_feed`
+and the optional `pyth_price_feed` account (both kept so account layouts don't change).
 
 **Liquidation.** A position is liquidatable when its equity is at or below the maintenance
 margin (110% of its current value, by default) or when it is past its expiry.
@@ -70,8 +72,8 @@ margin (110% of its current value, by default) or when it is past its expiry.
 
 ## Outside liquidators
 
-- **Pyth-listed markets** need nothing from ShortStake.
-- **Other markets** need a signed price from the public oracle:
+Every market needs a signed price from the public oracle. Fetch a liquidation price right before
+sending it (it is usable for about 15 seconds):
 
 ```
 POST https://euwmdcepgwcesoqntlnd.supabase.co/functions/v1/price-oracle

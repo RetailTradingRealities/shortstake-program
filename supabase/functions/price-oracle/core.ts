@@ -50,6 +50,24 @@ export const GUARDS = {
   historySeconds: 600,
 } as const;
 
+/** How long the program accepts any signed price (signed_price.rs MAX_SIGNED_PRICE_AGE_SECONDS). */
+export const PROGRAM_MAX_PRICE_AGE_SECONDS = 60;
+/**
+ * How long a LIQUIDATION price stays usable on-chain. A liquidate signature names no position, so
+ * for its whole validity anyone can use it on any position in the mint: in a falling market a
+ * liquidator could keep the highest one and use it after the drop, for both the trigger and the
+ * payout (reported by KupiaSec, 2026-11-23). Until the program checks a shorter age itself, the
+ * oracle backdates liquidation publish times so the program's 60 s limit leaves only this much.
+ */
+export const LIQUIDATION_PRICE_VALIDITY_SECONDS = 15;
+
+/** The publish_time to sign: now, or backdated for liquidations (see above). */
+export function publishTimeFor(action: PriceAction, nowSeconds: number): number {
+  return action === PriceAction.LiquidatePosition
+    ? nowSeconds - (PROGRAM_MAX_PRICE_AGE_SECONDS - LIQUIDATION_PRICE_VALIDITY_SECONDS)
+    : nowSeconds;
+}
+
 export interface SourceQuote {
   source: SourceName;
   priceUsd: number;

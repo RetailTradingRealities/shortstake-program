@@ -3,7 +3,6 @@
 // won't see. Pluggable so tests can inject fixed prices.
 import { type Address, type GetAccountInfoApi, type KeyPairSigner, type Rpc } from "@solana/kit";
 import { OracleFlag } from "../../../clients/js/src/generated/types";
-import { getPythPriceAccount, readPythPrice } from "../oracle/pyth";
 import { PriceAction, fetchSignedPrice, signPrice } from "../oracle/signedPrice";
 import { type OracleSelection } from "../instructions/OpenBorrowPosition";
 
@@ -18,10 +17,9 @@ export interface PriceSource {
 }
 
 /**
- * Production prices. Custom-oracle markets: a LiquidatePosition-signed price from the
- * price-oracle Edge Function, cached per mint (the program accepts signed prices up to 60s old,
- * and every call costs the oracle upstream API quota). Pyth markets: the sponsored price
- * account read directly - always fresh, the program re-reads the same account.
+ * Production prices: a LiquidatePosition-signed price from the price-oracle Edge Function for
+ * every market, cached per mint for a few seconds (a liquidation price is only usable on-chain
+ * for ~15 s, and every call costs the oracle upstream API quota).
  */
 export class LivePriceSource implements PriceSource {
     private readonly cache = new Map<Address, { at: number; price: LiquidationPrice }>();
@@ -30,16 +28,14 @@ export class LivePriceSource implements PriceSource {
         private readonly rpc: Rpc<GetAccountInfoApi>,
         private readonly oracleUrl: string,
         private readonly supabaseAnonKey: string,
-        private readonly signedPriceCacheMs = 20_000,
+        // Short: liquidation prices are only usable on-chain for ~15 s (the oracle backdates
+        // them, price-oracle core.ts LIQUIDATION_PRICE_VALIDITY_SECONDS).
+        private readonly signedPriceCacheMs = 3_000,
     ) {}
 
-    async liquidationPrice(tokenMint: Address, oracleFlag: OracleFlag): Promise<LiquidationPrice> {
-        if (oracleFlag === OracleFlag.Pyth) {
-            const priceFeed = getPythPriceAccount(tokenMint);
-            if (!priceFeed) throw new Error(`market ${tokenMint} is Pyth-priced but its mint isn't in PYTH_FEEDS`);
-            const { units } = await readPythPrice(this.rpc, priceFeed);
-            return { oracle: { kind: "pyth", priceFeed }, priceUsd: units };
-        }
+    // Every market is priced by the signed oracle since 2026-11-21 (Pyth stopped pushing its
+    // meme-coin feeds), so the market's stored oracle flag is no longer consulted.
+    async liquidationPrice(tokenMint: Address, _oracleFlag?: OracleFlag): Promise<LiquidationPrice> {
         const cached = this.cache.get(tokenMint);
         if (cached && Date.now() - cached.at < this.signedPriceCacheMs) return cached.price;
         const signedPrice = await fetchSignedPrice(this.oracleUrl, this.supabaseAnonKey, tokenMint, PriceAction.LiquidatePosition);

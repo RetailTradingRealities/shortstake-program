@@ -20,8 +20,11 @@ import { createKeeperLookupTable } from "../instructions/keeperLookupTable";
 import { type SolanaClient } from "../instructions/OpenBorrowPosition";
 import { Keeper, type KeeperConfig } from "./keeper";
 import { LivePriceSource } from "./priceSource";
+import { syncSiteLookupTable } from "./siteTable";
 
 const USDC_MAINNET_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+/** The mainnet program's FEE_COLLECTOR_PUBKEY (the Config Squad vault). */
+const FEE_COLLECTOR = address("52g8arY1QG7wQkAb1N9hPJ5UVs8Kqfo2wNVZbPrZ8Lfr");
 const DEFAULT_ORACLE_URL = "https://euwmdcepgwcesoqntlnd.supabase.co/functions/v1/price-oracle";
 const LOW_SOL_LAMPORTS = 50_000_000n; // 0.05 SOL: fees, ATA rent, lookup-table rent
 
@@ -70,7 +73,7 @@ async function main() {
     // The keeper's own lookup table: created once, then reused. KEEPER_LOOKUP_TABLE wins;
     // otherwise it's remembered in KEEPER_STATE_FILE.
     const stateFile = env("KEEPER_STATE_FILE", "keeper-state.json");
-    const state: { lookupTable?: string } = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : {};
+    const state: { lookupTable?: string; siteLookupTable?: string } = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : {};
     let lookupTable: Address | undefined = process.env.KEEPER_LOOKUP_TABLE ? address(env("KEEPER_LOOKUP_TABLE")) : state.lookupTable ? address(state.lookupTable) : undefined;
     if (!lookupTable) {
         lookupTable = await createKeeperLookupTable(client, keeper);
@@ -96,6 +99,38 @@ async function main() {
             writeFileSync(stateFile, JSON.stringify({ ...current, lookupTable: table, previousLookupTables: [...(current.previousLookupTables ?? []), current.lookupTable].filter(Boolean) }, null, 2) + "\n");
         },
     };
+    // The SITE lookup table (siteTable.ts), owned by this keeper's wallet: KEEPER_SITE_LOOKUP_TABLE
+    // = its address, or "create" to make one on first start (saved in the state file). Unset: off.
+    // Its address goes into the website's VITE_SITE_LOOKUP_TABLE.
+    let siteLookupTable: Address | undefined;
+    const siteSetting = process.env.KEEPER_SITE_LOOKUP_TABLE?.trim();
+    if (siteSetting === "create") {
+        const saved = (existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : {}) as { siteLookupTable?: string };
+        if (saved.siteLookupTable) {
+            siteLookupTable = address(saved.siteLookupTable);
+        } else {
+            siteLookupTable = await createKeeperLookupTable(client, keeper);
+            const current = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : {};
+            writeFileSync(stateFile, JSON.stringify({ ...current, siteLookupTable }, null, 2) + "\n");
+            log("info", "created SITE lookup table - set the website's VITE_SITE_LOOKUP_TABLE to it", { siteLookupTable, savedTo: stateFile });
+        }
+    } else if (siteSetting) {
+        siteLookupTable = address(siteSetting);
+    }
+    const siteSyncMs = Number(env("KEEPER_SITE_TABLE_SYNC_MINUTES", "10")) * 60_000;
+    let lastSiteSync = 0;
+    /** Adds new markets' accounts to the site table. Never fails the cycle: logs and retries later. */
+    const syncSiteTable = async () => {
+        if (!siteLookupTable || config.dryRun || Date.now() - lastSiteSync < siteSyncMs) return;
+        lastSiteSync = Date.now();
+        try {
+            const { markets } = await syncSiteLookupTable(client, keeper, siteLookupTable, address(USDC_MAINNET_MINT), FEE_COLLECTOR);
+            log("info", "site lookup table synced", { siteLookupTable, markets });
+        } catch (err) {
+            log("warn", "site lookup table sync failed (retried next time)", { siteLookupTable, error: String(err) });
+        }
+    };
+
     const prices = new LivePriceSource(client.rpc, env("PRICE_ORACLE_URL", DEFAULT_ORACLE_URL), env("SUPABASE_ANON_KEY"));
     const bot = new Keeper(client, keeper, prices, config);
     const pollMs = Number(env("KEEPER_POLL_SECONDS", "15")) * 1000;
@@ -103,6 +138,7 @@ async function main() {
     log("info", "keeper starting", {
         keeper: keeper.address,
         lookupTable,
+        siteLookupTable: siteLookupTable ?? "off",
         role: config.standbyDelaySeconds > 0 ? `standby (${config.standbyDelaySeconds}s delay)` : "primary",
         pollSeconds: pollMs / 1000,
         minProfitUsdc: Number(config.minProfitUsdc) / 1e6,
@@ -125,6 +161,7 @@ async function main() {
             const lamports = (await client.rpc.getBalance(keeper.address).send()).value;
             if (lamports < LOW_SOL_LAMPORTS) log("warn", "keeper SOL balance is low - top it up", { sol: Number(lamports) / 1e9 });
 
+            await syncSiteTable();
             const report = await bot.runCycle();
             consecutiveFailures = 0;
             log("info", "cycle", {

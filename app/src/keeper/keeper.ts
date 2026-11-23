@@ -100,18 +100,7 @@ export class Keeper {
         for (const p of positions) {
             const price = prices.get(p.market.tokenMint);
             if (!price) continue;
-            const check = checkLiquidatable({
-                amountBorrowed: p.position.amountBorrowed,
-                collateralUsdc: p.position.collateralDeposited,
-                entryPriceUsd: p.position.entryPriceUsd,
-                priceUsd: price.priceUsd,
-                decimals: p.decimals,
-                interestRateBps: p.offer.interestRateBps,
-                loanStartTimestamp: p.position.loanStartTimestamp,
-                expiryTimestamp: p.position.expiryTimestamp,
-                liquidationThreshBps: config.liquidationThreshBps,
-                nowUnix,
-            });
+            const check = this.liquidationCheck(p, price, config.liquidationThreshBps, nowUnix);
             if (check.liquidatable) {
                 due.push({ p, shortfall: check.maintenanceUsdc - check.equityUsdc, expired: check.isExpired });
             } else {
@@ -136,7 +125,23 @@ export class Keeper {
                 report.results.push({ position: p.address, status: "deferred" });
                 continue;
             }
-            const price = prices.get(p.market.tokenMint)!;
+            // A liquidation price is only usable on-chain for ~15 s, and earlier attempts this
+            // cycle may have taken longer than that: fetch a fresh one (cached for a few seconds)
+            // and re-check the position against it.
+            let price = prices.get(p.market.tokenMint)!;
+            try {
+                price = await this.prices.liquidationPrice(p.market.tokenMint, p.market.expectedOracleFeed);
+                prices.set(p.market.tokenMint, price);
+            } catch (err) {
+                log("warn", "no fresh price for market, skipping position this cycle", { position: p.address, error: String(err) });
+                continue;
+            }
+            // nowUnix (the caller's clock - a fork's in tests) plus the time this cycle has taken.
+            const elapsedSeconds = BigInt(Math.floor((Date.now() - nowMs) / 1000));
+            if (!this.isLiquidatable(p, price, config.liquidationThreshBps, nowUnix + elapsedSeconds)) {
+                this.firstLiquidatable.delete(p.address);
+                continue;
+            }
             const skippedAt = this.unprofitableAt.get(p.address);
             if (skippedAt !== undefined && skippedAt > 0n) {
                 const moveBps = ((price.priceUsd > skippedAt ? price.priceUsd - skippedAt : skippedAt - price.priceUsd) * 10_000n) / skippedAt;
@@ -145,7 +150,18 @@ export class Keeper {
             if ((this.backoffUntil.get(p.address) ?? 0) > nowMs) continue;
             if (report.attempted >= this.config.maxPerCycle) break;
 
-            const status = await this.liquidate(p, price, expired);
+            let status = await this.liquidate(p, price, expired);
+            // The price expired while the transaction was being built (slow route search): once
+            // more with a fresh one, rather than backing off.
+            if (status === "simulation_failed_stale_price") {
+                try {
+                    price = await this.prices.liquidationPrice(p.market.tokenMint, p.market.expectedOracleFeed);
+                    status = await this.liquidate(p, price, expired);
+                } catch (err) {
+                    log("warn", "no fresh price for retry", { position: p.address, error: String(err) });
+                }
+                if (status === "simulation_failed_stale_price") status = "simulation_failed";
+            }
             if (!FREE_OUTCOMES.has(status)) report.attempted++;
             report.results.push({ position: p.address, status });
 
@@ -167,7 +183,30 @@ export class Keeper {
         return report;
     }
 
-    private async liquidate(p: OpenPosition, price: LiquidationPrice, expired: boolean): Promise<AttemptStatus> {
+    private liquidationCheck(p: OpenPosition, price: LiquidationPrice, liquidationThreshBps: number, nowUnix: bigint) {
+        return checkLiquidatable({
+            amountBorrowed: p.position.amountBorrowed,
+            collateralUsdc: p.position.collateralDeposited,
+            entryPriceUsd: p.position.entryPriceUsd,
+            priceUsd: price.priceUsd,
+            decimals: p.decimals,
+            interestRateBps: p.offer.interestRateBps,
+            loanStartTimestamp: p.position.loanStartTimestamp,
+            expiryTimestamp: p.position.expiryTimestamp,
+            liquidationThreshBps,
+            nowUnix,
+        });
+    }
+
+    private isLiquidatable(p: OpenPosition, price: LiquidationPrice, liquidationThreshBps: number, nowUnix: bigint) {
+        return this.liquidationCheck(p, price, liquidationThreshBps, nowUnix).liquidatable;
+    }
+
+    private async liquidate(
+        p: OpenPosition,
+        price: LiquidationPrice,
+        expired: boolean,
+    ): Promise<AttemptStatus | "simulation_failed_stale_price"> {
         const { log } = this.config;
         const fields = {
             position: p.address,
@@ -208,6 +247,9 @@ export class Keeper {
                 });
             }
             log(result.status === "sent" || result.status === "simulated" ? "info" : "warn", result.status, { ...fields, ...extra });
+            if (result.status === "simulation_failed" && result.logs.some((line) => line.includes("StaleOraclePrice"))) {
+                return "simulation_failed_stale_price";
+            }
             return result.status;
         } catch (err) {
             // A full lookup table (Slot Zero L-02): switch to a fresh one and retry next cycle.

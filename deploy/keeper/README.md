@@ -1,8 +1,8 @@
 # Liquidation keeper on a Linux VPS
 
 The keeper (`app/src/keeper/`) is one long-running Node process. Every `KEEPER_POLL_SECONDS` it
-reads all open positions **from the chain**, prices each market once (signed price from the
-price-oracle function, or Pyth), runs the program's own liquidation check, and liquidates what
+reads all open positions **from the chain**, prices each market (signed price from the
+price-oracle function, refreshed right before each liquidation), runs the program's own liquidation check, and liquidates what
 qualifies:
 
 - **buyback** - Jupiter Lend flash loan -> Jupiter swap -> `liquidate_position` -> repay, in one

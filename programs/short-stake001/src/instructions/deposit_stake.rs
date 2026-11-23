@@ -38,14 +38,11 @@ pub fn deposit_stake(
         ShortStakeError::InvalidExpiryDays
     );
 
-    // Determine which oracle mode this market uses. A brand-new market_vault has no
-    // stored flag yet, so it's derived fresh from the Pyth allow-list instead.
+    // Every market now uses the signed oracle (2026-11-21, see get_current_price.rs). A market
+    // created as Pyth (e.g. WIF) is relabelled Custom on its next stake, below, so the stored
+    // flag and the StakeEvent the indexer reads match how the market is actually priced.
     let is_new_market = ctx.accounts.market_vault.token_mint == Pubkey::default();
-    let oracle_flag = if is_new_market {
-        is_pyth_supported(ctx.accounts.token_mint.key())
-    } else {
-        ctx.accounts.market_vault.expected_oracle_feed.clone()
-    };
+    let oracle_flag = is_pyth_supported(ctx.accounts.token_mint.key());
 
     // Reject the deposit up front if no valid price source is available for this mint -
     // avoids sinking rent into a market that can never be borrowed against or liquidated.
@@ -90,10 +87,11 @@ pub fn deposit_stake(
         market_vault.token_mint = ctx.accounts.token_mint.key();
         market_vault.vault_token_account = ctx.accounts.vault_token_account.key();
         market_vault.bump = ctx.bumps.market_vault;
-        market_vault.expected_oracle_feed = oracle_flag;
         // Track whoever paid to create this market's infra, so it can be refunded on full drain.
         market_vault.payer = ctx.accounts.staker.key();
     }
+
+    market_vault.expected_oracle_feed = oracle_flag;
 
     market_vault.total_staked_amount = market_vault
         .total_staked_amount
@@ -254,8 +252,8 @@ pub struct StakeEvent {
     pub market_total_staked: u64,
     /// market_vault.payer (rent-refund wallet, set on first stake).
     pub market_payer: Pubkey,
-    /// market_vault.expected_oracle_feed - fixed on the market's first stake (Pyth if the
-    /// mint is on PYTH_ALLOWED_FEEDS, otherwise Custom), so the indexer never has to guess.
+    /// market_vault.expected_oracle_feed - always Custom since 2026-11-21 (older markets may
+    /// still say Pyth until their next stake; the program ignores it), so the indexer never guesses.
     pub oracle_flag: OracleFlag,
     pub token_decimals: u8,
     pub timestamp: i64,

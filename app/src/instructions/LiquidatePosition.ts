@@ -30,6 +30,7 @@ import { getLiquidatePositionInstructionAsync } from '../../../clients/js/src/ge
 import { findBorrowPositionPda, findLenderOfferPda } from '../../../clients/js/src/generated/pdas';
 import { fetchBorrowPosition } from '../../../clients/js/src/generated/accounts';
 import { readPythPrice } from '../oracle/pyth';
+import { isNoRouteError, sizeExactInBuyback } from './exactInBuyback';
 import { getFlashLoanInstructions } from './flashLoan';
 import { ensureInLookupTable, lookupCandidates, sendIxs } from './keeperLookupTable';
 import { resolvePayoutAccount } from './payoutAccounts';
@@ -45,7 +46,9 @@ const FEE_COLLECTOR_PUBKEY = address("52g8arY1QG7wQkAb1N9hPJ5UVs8Kqfo2wNVZbPrZ8L
 // Jupiter Metis Swap API v1: the only Jupiter swap API with ExactOut (Swap v2 /build is
 // ExactIn only), and we must receive EXACTLY amount_borrowed. Keyless works at low rate limits;
 // pass an API key (x-api-key) in production. quote-api.jup.ag/v6 no longer resolves.
-const JUPITER_SWAP_API = "https://api.jup.ag/swap/v1";
+// FORK TESTS ONLY may point this elsewhere (e.g. a local proxy limited to ordinary pools, since
+// proprietary market makers reject trades on a fork's stale slot). Unset everywhere else.
+const JUPITER_SWAP_API = process.env.KEEPER_JUPITER_SWAP_API_FOR_FORK_TESTS ?? "https://api.jup.ag/swap/v1";
 
 const COMPUTE_BUDGET_PROGRAM = address("ComputeBudget111111111111111111111111111111");
 const MAX_TRANSACTION_BYTES = 1232;
@@ -353,19 +356,58 @@ export async function executeLiquidatePosition(
     const deviates = (marketPriceUsd: bigint) =>
         oracle.kind === "custom" && priceUsd * 10_000n > marketPriceUsd * BigInt(10_000 + maxPriceDeviationBps);
 
+    /**
+     * A USDC -> token quote that delivers at least amount_borrowed:
+     * - ExactOut where Jupiter has such a route: exactly amount_borrowed; the swap may spend up to
+     *   otherAmountThreshold (the worst case after slippage), the estimate is inAmount.
+     * - Otherwise ExactIn (e.g. Pump.fun AMM tokens have no ExactOut route): a USDC amount sized
+     *   so even the worst fill covers amount_borrowed (exactInBuyback.ts). It spends exactly
+     *   inAmount; the surplus tokens stay in the keeper's token account. Its expected cost of
+     *   amount_borrowed tokens is inAmount scaled by amount_borrowed / outAmount.
+     * The mode is decided once per liquidation, from an uncapped ExactOut quote.
+     */
+    let buyBackMode: "exactOut" | "exactIn" | undefined;
+    let sellEstimateUsdc: bigint | undefined;
+    const quoteUrl = (inputMint: Address, outputMint: Address, amount: bigint, swapMode: string, cap: number | undefined) =>
+        `${JUPITER_SWAP_API}/quote?inputMint=${inputMint}&outputMint=${outputMint}` +
+        `&amount=${amount}&swapMode=${swapMode}&slippageBps=${slippageBps}` +
+        (cap ? `&maxAccounts=${cap}` : "");
+    const buyBackQuote = async (cap: number | undefined): Promise<{ quoteResponse: any; maxInUsdc: bigint; expectedInUsdc: bigint }> => {
+        if (buyBackMode === undefined) {
+            try {
+                const exactOut = await jupiterJson(quoteUrl(USDC_MAINNET_MINT, tokenMint, position.amountBorrowed, "ExactOut", undefined), jupiterApiKey);
+                buyBackMode = "exactOut";
+                if (cap === undefined) {
+                    return { quoteResponse: exactOut, maxInUsdc: BigInt(exactOut.otherAmountThreshold), expectedInUsdc: BigInt(exactOut.inAmount) };
+                }
+            } catch (err) {
+                if (!isNoRouteError(err)) throw err;
+                buyBackMode = "exactIn";
+            }
+        }
+        if (buyBackMode === "exactOut") {
+            const q = await jupiterJson(quoteUrl(USDC_MAINNET_MINT, tokenMint, position.amountBorrowed, "ExactOut", cap), jupiterApiKey);
+            return { quoteResponse: q, maxInUsdc: BigInt(q.otherAmountThreshold), expectedInUsdc: BigInt(q.inAmount) };
+        }
+        // First guess: what selling amount_borrowed would fetch (the bid); sized up from there.
+        sellEstimateUsdc ??= BigInt(
+            (await jupiterJson(quoteUrl(tokenMint, USDC_MAINNET_MINT, position.amountBorrowed, "ExactIn", undefined), jupiterApiKey)).outAmount,
+        );
+        const { quote: q, usdcIn } = await sizeExactInBuyback(position.amountBorrowed, sellEstimateUsdc, (amount) =>
+            jupiterJson(quoteUrl(USDC_MAINNET_MINT, tokenMint, amount, "ExactIn", cap), jupiterApiKey),
+        );
+        return { quoteResponse: q, maxInUsdc: usdcIn, expectedInUsdc: (usdcIn * position.amountBorrowed) / BigInt(q.outAmount) };
+    };
+
     let compiled: Awaited<ReturnType<typeof compile>>;
 
     if (plan.path === "write_off") {
         // Reference price (Slot Zero M-01): a write-off pays the staker all the collateral, so a
         // signed price far above the market shouldn't trigger one. No route = can't check; go on.
         if (oracle.kind === "custom") {
-            const reference = await jupiterJson(
-                `${JUPITER_SWAP_API}/quote?inputMint=${USDC_MAINNET_MINT}&outputMint=${tokenMint}` +
-                    `&amount=${position.amountBorrowed}&swapMode=ExactOut&slippageBps=${slippageBps}`,
-                jupiterApiKey,
-            ).catch(() => null);
-            if (reference?.inAmount) {
-                const marketPriceUsd = impliedPrice(BigInt(reference.inAmount));
+            const reference = await buyBackQuote(undefined).catch(() => null);
+            if (reference) {
+                const marketPriceUsd = impliedPrice(reference.expectedInUsdc);
                 if (deviates(marketPriceUsd)) return { status: "skipped_price_deviation", plan, signedPriceUsd: priceUsd, marketPriceUsd };
             }
         }
@@ -400,16 +442,9 @@ export async function executeLiquidatePosition(
         let fitting: typeof compiled | undefined;
         let smallest = Infinity;
         for (const cap of routeCaps) {
-            // ExactOut: receive exactly amount_borrowed. `otherAmountThreshold` is the most USDC the
-            // swap may spend after slippage - that's what we must borrow; `inAmount` is the estimate.
-            const quoteResponse = await jupiterJson(
-                `${JUPITER_SWAP_API}/quote?inputMint=${USDC_MAINNET_MINT}&outputMint=${tokenMint}` +
-                    `&amount=${position.amountBorrowed}&swapMode=ExactOut&slippageBps=${slippageBps}` +
-                    (cap ? `&maxAccounts=${cap}` : ""),
-                jupiterApiKey,
-            );
-            const maxInUsdc = BigInt(quoteResponse.otherAmountThreshold);
-            const expectedInUsdc = BigInt(quoteResponse.inAmount);
+            // `maxInUsdc` is what we must flash-borrow (the most the swap may spend), `expectedInUsdc`
+            // the expected cost of amount_borrowed tokens (for the price-deviation check).
+            const { quoteResponse, maxInUsdc, expectedInUsdc } = await buyBackQuote(cap);
             const marketPriceUsd = impliedPrice(expectedInUsdc);
             if (deviates(marketPriceUsd)) return { status: "skipped_price_deviation", plan, signedPriceUsd: priceUsd, marketPriceUsd };
 
@@ -445,7 +480,7 @@ export async function executeLiquidatePosition(
             );
             const jupiterIxs = [
                 ...jupiterSetup.map(toKitInstruction),
-                toKitInstruction(swap.swapInstruction), // USDC -> exactly amount_borrowed tokens
+                toKitInstruction(swap.swapInstruction), // USDC -> at least amount_borrowed tokens
                 ...(swap.cleanupInstruction ? [toKitInstruction(swap.cleanupInstruction)] : []),
                 ...(swap.otherInstructions ?? []).map(toKitInstruction),
             ];

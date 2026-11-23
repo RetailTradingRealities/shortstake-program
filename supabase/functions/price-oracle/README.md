@@ -43,6 +43,10 @@ keeps 10 minutes of accepted prices, plus one older entry.
 - `liquidate` signs the **lower** of the current price and the anchor. So a pumped pool has to
   hold for over a minute before it can liquidate shorts, and a genuine fast rise reaches
   liquidations about a minute late.
+- `liquidate` prices are **backdated by 45 s**, so the program (which accepts signed prices for
+  60 s) takes them for only about 15 s. A liquidate signature names no position, so with a long
+  window a liquidator could keep the highest price of a falling minute and use it after the drop
+  (reported by KupiaSec, 2026-11-23). Fetch a liquidation price right before sending it.
 - `open` signs the **higher** of the two, so a dumped pool can't let a borrower post less
   collateral.
 - `deposit` and `close` sign the current price.

@@ -23,6 +23,7 @@ import {
   anchorPrice,
   applyJumpGuard,
   exitFallbackPrice,
+  publishTimeFor,
   signedPriceMessage,
   signingPrice,
   usdToPriceUnits,
@@ -293,7 +294,9 @@ async function signAndRespond(
   }
   const oracle = await oracleSigner();
   const enc = getAddressEncoder();
-  const publishTime = BigInt(now);
+  // Liquidation prices are backdated so the program accepts them for only
+  // LIQUIDATION_PRICE_VALIDITY_SECONDS (core.ts). The cache below still keys on the real time.
+  const publishTime = BigInt(publishTimeFor(action, now));
   const message = signedPriceMessage(
     enc.encode(address(PROGRAM_ID)) as Uint8Array,
     enc.encode(address(mint)) as Uint8Array,

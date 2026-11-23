@@ -21,6 +21,7 @@
     "admin:extend": "tsx app/src/scripts/extend-program.ts",
     "admin:mainnet": "tsx app/src/scripts/admin-mainnet.ts",
     "test:keeper": "tsx scripts/test-liquidation-plan.mts",
+    "test:buyback": "tsx scripts/test-exactin-buyback.mts",
     "surfpool:flash": "tsx --env-file=.env app/src/scripts/surfpool/flash-liquidate.ts",
     "test:indexer-sql": "tsx scripts/test-indexer-sql.mts",
     "test:consent": "tsx scripts/test-wallet-consent.mts",

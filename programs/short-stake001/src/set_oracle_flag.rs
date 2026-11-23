@@ -1,13 +1,8 @@
 use anchor_lang::prelude::*;
-use crate::pyth_feeds_list::{OracleFlag, PYTH_ALLOWED_FEEDS};
+use crate::pyth_feeds_list::OracleFlag;
 
-// Determines which oracle a market_vault should use, based on the allowed Pyth feed list.
-pub fn is_pyth_supported(token_mint: Pubkey) -> OracleFlag {
-    for (mint, _feed_id, _price_account) in PYTH_ALLOWED_FEEDS.iter() {
-        if *mint == token_mint {
-            return OracleFlag::Pyth;
-        }
-    }
-
+// The oracle mode a new market_vault records. Every market now uses the signed oracle
+// (2026-11-21, see get_current_price.rs); the Pyth allow-list is no longer consulted.
+pub fn is_pyth_supported(_token_mint: Pubkey) -> OracleFlag {
     OracleFlag::Custom
 }
