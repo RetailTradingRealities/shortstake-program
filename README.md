@@ -55,8 +55,9 @@ closing, unstaking and liquidating always work.
 
 **Prices.** Every market is priced by the oracle signer: a signed price, verified on chain with an
 Ed25519 instruction placed directly before the program instruction. Each signed price is for one
-program, mint and action. The program accepts it for 60 seconds; liquidation prices are signed
-45 seconds in the past, so they are usable for only about 15 (see the oracle's README).
+program, mint and action. The program accepts a liquidation price for 15 seconds
+(`MAX_LIQUIDATION_PRICE_AGE_SECONDS`) and the others for 60: a liquidation signature names no
+position, so a long window would let a liquidator keep the highest price of a falling market.
 
 Until 2026-11-22, tokens on a Pyth list were priced from Pyth's sponsored push feeds instead. Pyth
 stopped updating its meme-token feeds, so the program now ignores the stored `expected_oracle_feed`

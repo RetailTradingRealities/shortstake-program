@@ -14,6 +14,8 @@ import {
   LIQUIDATION_PRICE_VALIDITY_SECONDS,
   PROGRAM_MAX_PRICE_AGE_SECONDS,
   publishTimeFor,
+  liquidationBackdateSeconds,
+  DEFAULT_LIQUIDATION_BACKDATE_SECONDS,
   signingPrice,
   signedPriceMessage,
   usdToPriceUnits,
@@ -542,6 +544,17 @@ const birdeyeOk = {
   for (const action of [PriceAction.DepositStake, PriceAction.OpenBorrowPosition, PriceAction.ClosePosition]) {
     assert.equal(publishTimeFor(action, NOW), NOW);
   }
+  // The LIQUIDATION_PRICE_BACKDATE_SECONDS secret: default 45, 0 after the program upgrade.
+  assert.equal(DEFAULT_LIQUIDATION_BACKDATE_SECONDS, 45);
+  assert.equal(liquidationBackdateSeconds(undefined), 45);
+  assert.equal(liquidationBackdateSeconds(''), 45);
+  assert.equal(liquidationBackdateSeconds('abc'), 45);
+  assert.equal(liquidationBackdateSeconds('1.5'), 45);
+  assert.equal(liquidationBackdateSeconds('0'), 0);
+  assert.equal(liquidationBackdateSeconds('-5'), 0);
+  assert.equal(liquidationBackdateSeconds('999'), 45);
+  assert.equal(publishTimeFor(PriceAction.LiquidatePosition, NOW, 0), NOW);
+  assert.equal(publishTimeFor(PriceAction.OpenBorrowPosition, NOW, 0), NOW);
 }
 
 console.log('price oracle core: all assertions passed');

@@ -139,6 +139,11 @@ fn open_short_lived_position() -> Scenario {
 }
 
 fn attempt_liquidate(s: &mut Scenario) -> Result<(), String> {
+    attempt_liquidate_with_price_age(s, 0)
+}
+
+/// `attempt_liquidate` with a liquidate price signed `price_age_seconds` before the cluster clock.
+fn attempt_liquidate_with_price_age(s: &mut Scenario, price_age_seconds: i64) -> Result<(), String> {
     let liquidator = s.ctx.new_funded_keypair(10_000_000_000);
     let liquidator_pk = to_anchor(liquidator.pubkey());
     let liquidator_token_account = s.ctx.create_ata(liquidator_pk, CUSTOM_ORACLE_TOKEN_MINT, s.borrow_amount);
@@ -147,10 +152,12 @@ fn attempt_liquidate(s: &mut Scenario) -> Result<(), String> {
     let fee_collector_usdc_account =
         s.ctx.create_ata(short_stake001::constants::FEE_COLLECTOR_PUBKEY, s.usdc_mint, 0);
 
-    s.ctx.send_with_price(
-        &liquidator,
+    let price_ix = s.ctx.signed_price_ix_at(
         CUSTOM_ORACLE_TOKEN_MINT,
-        ix_liquidate_position(
+        short_stake001::signed_price::PriceAction::LiquidatePosition,
+        s.ctx.unix_timestamp() - price_age_seconds,
+    );
+    let liquidate_ix = ix_liquidate_position(
             liquidator_pk,
             s.borrower_pk,
             s.staker_pk,
@@ -167,9 +174,8 @@ fn attempt_liquidate(s: &mut Scenario) -> Result<(), String> {
             s.borrower_usdc_account,
             s.lender_offer,
             s.borrow_position,
-        ),
-        &[],
-    )
+        );
+    s.ctx.send_ixs(&liquidator, vec![price_ix, liquidate_ix], &[])
 }
 
 /// A healthy position that hasn't reached its expiry yet must not be liquidatable.
@@ -212,4 +218,48 @@ fn liquidate_position_succeeds_just_after_expiry() {
 
     assert_eq!(s.ctx.token_balance(s.vault_token_account), s.stake_amount);
     assert_eq!(s.ctx.lamports(s.borrow_position), 0);
+}
+
+/// A liquidate price is accepted for 15 s (MAX_LIQUIDATION_PRICE_AGE_SECONDS), not the 60 s other
+/// actions get: a liquidate signature names no position, so a long window would let a liquidator
+/// keep the highest price of a falling market and use it after the drop (KupiaSec, 2026-11-23).
+#[test]
+fn liquidate_position_accepts_price_at_liquidation_max_age() {
+    let mut s = open_short_lived_position();
+    s.ctx.warp_unix_timestamp(s.expiry_timestamp);
+
+    attempt_liquidate_with_price_age(
+        &mut s,
+        short_stake001::signed_price::MAX_LIQUIDATION_PRICE_AGE_SECONDS,
+    )
+    .expect("a liquidate price exactly at its max age is still valid");
+    assert_eq!(s.ctx.lamports(s.borrow_position), 0);
+}
+
+#[test]
+fn liquidate_position_rejects_price_older_than_liquidation_max_age() {
+    let mut s = open_short_lived_position();
+    s.ctx.warp_unix_timestamp(s.expiry_timestamp);
+
+    let result = attempt_liquidate_with_price_age(
+        &mut s,
+        short_stake001::signed_price::MAX_LIQUIDATION_PRICE_AGE_SECONDS + 1,
+    );
+    let err = result.expect_err("a liquidate price older than 15 s must be refused");
+    let code = u32::from(short_stake001::ShortStakeError::StaleOraclePrice);
+    assert!(err.contains(&format!("Custom({code})")), "expected StaleOraclePrice, got: {err}");
+    assert!(s.ctx.lamports(s.borrow_position) > 0, "position must still be open");
+}
+
+#[test]
+fn liquidation_max_age_is_shorter_than_other_actions() {
+    use short_stake001::signed_price::{PriceAction, MAX_SIGNED_PRICE_AGE_SECONDS};
+    assert_eq!(PriceAction::LiquidatePosition.max_age_seconds(), 15);
+    for action in [
+        PriceAction::DepositStake,
+        PriceAction::OpenBorrowPosition,
+        PriceAction::ClosePosition,
+    ] {
+        assert_eq!(action.max_age_seconds(), MAX_SIGNED_PRICE_AGE_SECONDS);
+    }
 }

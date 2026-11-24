@@ -60,12 +60,29 @@ export const PROGRAM_MAX_PRICE_AGE_SECONDS = 60;
  * oracle backdates liquidation publish times so the program's 60 s limit leaves only this much.
  */
 export const LIQUIDATION_PRICE_VALIDITY_SECONDS = 15;
+/** The backdate the program before the per-action age check needs (60 s - 15 s). */
+export const DEFAULT_LIQUIDATION_BACKDATE_SECONDS = PROGRAM_MAX_PRICE_AGE_SECONDS - LIQUIDATION_PRICE_VALIDITY_SECONDS;
+
+/**
+ * The liquidation backdate from the LIQUIDATION_PRICE_BACKDATE_SECONDS secret. Once the program
+ * checks liquidate prices against its own 15 s limit (signed_price.rs MAX_LIQUIDATION_PRICE_AGE_SECONDS),
+ * a 45 s backdate would make every liquidate price too old: set the secret to 0 right after that
+ * upgrade executes. Missing or invalid -> the default (45). Clamped to 0..45.
+ */
+export function liquidationBackdateSeconds(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_LIQUIDATION_BACKDATE_SECONDS;
+  const n = Number(raw);
+  if (!Number.isInteger(n)) return DEFAULT_LIQUIDATION_BACKDATE_SECONDS;
+  return Math.min(Math.max(n, 0), DEFAULT_LIQUIDATION_BACKDATE_SECONDS);
+}
 
 /** The publish_time to sign: now, or backdated for liquidations (see above). */
-export function publishTimeFor(action: PriceAction, nowSeconds: number): number {
-  return action === PriceAction.LiquidatePosition
-    ? nowSeconds - (PROGRAM_MAX_PRICE_AGE_SECONDS - LIQUIDATION_PRICE_VALIDITY_SECONDS)
-    : nowSeconds;
+export function publishTimeFor(
+  action: PriceAction,
+  nowSeconds: number,
+  liquidationBackdate: number = DEFAULT_LIQUIDATION_BACKDATE_SECONDS,
+): number {
+  return action === PriceAction.LiquidatePosition ? nowSeconds - liquidationBackdate : nowSeconds;
 }
 
 export interface SourceQuote {

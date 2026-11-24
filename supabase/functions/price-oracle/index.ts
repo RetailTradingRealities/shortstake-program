@@ -23,6 +23,7 @@ import {
   anchorPrice,
   applyJumpGuard,
   exitFallbackPrice,
+  liquidationBackdateSeconds,
   publishTimeFor,
   signedPriceMessage,
   signingPrice,
@@ -295,8 +296,10 @@ async function signAndRespond(
   const oracle = await oracleSigner();
   const enc = getAddressEncoder();
   // Liquidation prices are backdated so the program accepts them for only
-  // LIQUIDATION_PRICE_VALIDITY_SECONDS (core.ts). The cache below still keys on the real time.
-  const publishTime = BigInt(publishTimeFor(action, now));
+  // LIQUIDATION_PRICE_VALIDITY_SECONDS (core.ts); LIQUIDATION_PRICE_BACKDATE_SECONDS=0 once the
+  // program checks 15 s itself. The cache below still keys on the real time.
+  const backdate = liquidationBackdateSeconds(Deno.env.get("LIQUIDATION_PRICE_BACKDATE_SECONDS"));
+  const publishTime = BigInt(publishTimeFor(action, now, backdate));
   const message = signedPriceMessage(
     enc.encode(address(PROGRAM_ID)) as Uint8Array,
     enc.encode(address(mint)) as Uint8Array,

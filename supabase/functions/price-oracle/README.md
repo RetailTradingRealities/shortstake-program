@@ -47,6 +47,11 @@ keeps 10 minutes of accepted prices, plus one older entry.
   60 s) takes them for only about 15 s. A liquidate signature names no position, so with a long
   window a liquidator could keep the highest price of a falling minute and use it after the drop
   (reported by KupiaSec, 2026-11-23). Fetch a liquidation price right before sending it.
+  The backdate comes from the `LIQUIDATION_PRICE_BACKDATE_SECONDS` secret (default 45). Once the
+  program upgrade that checks liquidate prices against its own 15 s limit
+  (`MAX_LIQUIDATION_PRICE_AGE_SECONDS` in `signed_price.rs`) has executed, set it to 0 straight
+  away; until then every liquidate price would be too old for the program:
+  `supabase secrets set LIQUIDATION_PRICE_BACKDATE_SECONDS=0 --project-ref euwmdcepgwcesoqntlnd`.
 - `open` signs the **higher** of the two, so a dumped pool can't let a borrower post less
   collateral.
 - `deposit` and `close` sign the current price.

@@ -219,11 +219,21 @@ impl TestCtx {
 
     /// Signed-price instruction for `token_mint` and `action` at the current on-chain time.
     pub fn signed_price_ix(&self, token_mint: AnchorPubkey, action: PriceAction) -> Instruction {
+        self.signed_price_ix_at(token_mint, action, self.unix_timestamp())
+    }
+
+    /// Like `signed_price_ix`, but signed as of `publish_time` (to test price age limits).
+    pub fn signed_price_ix_at(
+        &self,
+        token_mint: AnchorPubkey,
+        action: PriceAction,
+        publish_time: i64,
+    ) -> Instruction {
         let price = *self
             .custom_prices
             .get(&token_mint)
             .expect("call set_custom_price for this mint first");
-        let message = signed_price_message(token_mint, price, self.unix_timestamp(), action);
+        let message = signed_price_message(token_mint, price, publish_time, action);
         ed25519_ix(&self.oracle_signer, &message)
     }
 

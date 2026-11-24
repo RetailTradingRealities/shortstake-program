@@ -13,6 +13,9 @@ pub const ED25519_PROGRAM_ID: Pubkey = pubkey!("Ed25519SigVerify1111111111111111
 pub const INSTRUCTIONS_SYSVAR_ID: Pubkey = pubkey!("Sysvar1nstructions1111111111111111111111111");
 
 pub const MAX_SIGNED_PRICE_AGE_SECONDS: i64 = 60;
+// A liquidate price names no position, so while it is valid a liquidator can hold the highest
+// one of a falling market and use it after the drop (KupiaSec, 2026-11-23). Keep that window short.
+pub const MAX_LIQUIDATION_PRICE_AGE_SECONDS: i64 = 15;
 // Tolerates the backend's wall clock running slightly ahead of the cluster's unix_timestamp.
 pub const MAX_SIGNED_PRICE_FUTURE_SKEW_SECONDS: i64 = 10;
 
@@ -29,6 +32,16 @@ pub enum PriceAction {
     OpenBorrowPosition = 2,
     ClosePosition = 3,
     LiquidatePosition = 4,
+}
+
+impl PriceAction {
+    /// How old (in seconds, by the cluster clock) a price signed for this action may be.
+    pub const fn max_age_seconds(self) -> i64 {
+        match self {
+            PriceAction::LiquidatePosition => MAX_LIQUIDATION_PRICE_AGE_SECONDS,
+            _ => MAX_SIGNED_PRICE_AGE_SECONDS,
+        }
+    }
 }
 
 // Ed25519 precompile instruction layout: [num_signatures u8, padding u8, offsets (14 bytes) ...]
@@ -127,7 +140,7 @@ pub fn verify_signed_price(
         .checked_sub(publish_time)
         .ok_or(ShortStakeError::StaleOraclePrice)?;
     require!(
-        (-MAX_SIGNED_PRICE_FUTURE_SKEW_SECONDS..=MAX_SIGNED_PRICE_AGE_SECONDS).contains(&age),
+        (-MAX_SIGNED_PRICE_FUTURE_SKEW_SECONDS..=action.max_age_seconds()).contains(&age),
         ShortStakeError::StaleOraclePrice
     );
 
