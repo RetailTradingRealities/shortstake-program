@@ -28,8 +28,8 @@ export class LivePriceSource implements PriceSource {
         private readonly rpc: Rpc<GetAccountInfoApi>,
         private readonly oracleUrl: string,
         private readonly supabaseAnonKey: string,
-        // Short: liquidation prices are only usable on-chain for ~15 s (the oracle backdates
-        // them, price-oracle core.ts LIQUIDATION_PRICE_VALIDITY_SECONDS).
+        // Short: the program accepts a liquidation price for only 15 s
+        // (signed_price.rs MAX_LIQUIDATION_PRICE_AGE_SECONDS).
         private readonly signedPriceCacheMs = 3_000,
     ) {}
 

@@ -11,11 +11,6 @@ import {
   anchorPrice,
   applyJumpGuard,
   exitFallbackPrice,
-  LIQUIDATION_PRICE_VALIDITY_SECONDS,
-  PROGRAM_MAX_PRICE_AGE_SECONDS,
-  publishTimeFor,
-  liquidationBackdateSeconds,
-  DEFAULT_LIQUIDATION_BACKDATE_SECONDS,
   signingPrice,
   signedPriceMessage,
   usdToPriceUnits,
@@ -530,31 +525,6 @@ const birdeyeOk = {
   await assert.rejects(checkTokenSafety(mint, 'rc-key', serverError.fn, noSleep), /HTTP 500/);
   assert.equal(serverError.calls(), 1);
   assert.deepEqual(waits, []);
-}
-
-// Liquidation prices are backdated so the program's 60 s limit leaves only 15 s (KupiaSec,
-// 2026-11-23): a liquidate signature names no position, so a long validity lets a liquidator
-// keep the highest price from a falling market. Other actions keep the real time.
-{
-  assert.equal(PROGRAM_MAX_PRICE_AGE_SECONDS, 60, 'must match signed_price.rs MAX_SIGNED_PRICE_AGE_SECONDS');
-  const liq = publishTimeFor(PriceAction.LiquidatePosition, NOW);
-  assert.equal(NOW - liq, PROGRAM_MAX_PRICE_AGE_SECONDS - LIQUIDATION_PRICE_VALIDITY_SECONDS);
-  // usable on-chain until the program's age limit: NOW + 15 s
-  assert.equal(liq + PROGRAM_MAX_PRICE_AGE_SECONDS, NOW + LIQUIDATION_PRICE_VALIDITY_SECONDS);
-  for (const action of [PriceAction.DepositStake, PriceAction.OpenBorrowPosition, PriceAction.ClosePosition]) {
-    assert.equal(publishTimeFor(action, NOW), NOW);
-  }
-  // The LIQUIDATION_PRICE_BACKDATE_SECONDS secret: default 45, 0 after the program upgrade.
-  assert.equal(DEFAULT_LIQUIDATION_BACKDATE_SECONDS, 45);
-  assert.equal(liquidationBackdateSeconds(undefined), 45);
-  assert.equal(liquidationBackdateSeconds(''), 45);
-  assert.equal(liquidationBackdateSeconds('abc'), 45);
-  assert.equal(liquidationBackdateSeconds('1.5'), 45);
-  assert.equal(liquidationBackdateSeconds('0'), 0);
-  assert.equal(liquidationBackdateSeconds('-5'), 0);
-  assert.equal(liquidationBackdateSeconds('999'), 45);
-  assert.equal(publishTimeFor(PriceAction.LiquidatePosition, NOW, 0), NOW);
-  assert.equal(publishTimeFor(PriceAction.OpenBorrowPosition, NOW, 0), NOW);
 }
 
 console.log('price oracle core: all assertions passed');
