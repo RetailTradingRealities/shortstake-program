@@ -84,6 +84,11 @@ Rescans are rate-limited: HTTP 429 is retried twice (after 1s, then 3s, or a `Re
 of up to 5s) before the request is refused with 503.
 Thresholds live in `RUGCHECK_RULES` in `rugcheck.ts`.
 
+**Liquidity rule exemption.** Rugcheck counts liquidity only from pools where the token is the
+*base* token, so wrapped SOL (`So111...112`, the quote side of nearly every pool) reports 0 markets
+and $0. Mints in `LIQUIDITY_RULE_EXEMPT_MINTS` skip that one rule; the rugged, score and danger
+checks still apply, and the price still needs agreeing data feeds like any other token.
+
 ## Logs
 
 Each notable outcome is one JSON line in the function logs (Dashboard -> Edge Functions ->

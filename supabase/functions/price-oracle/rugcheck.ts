@@ -27,6 +27,16 @@ export const RUGCHECK_RULES = {
 } as const;
 
 /**
+ * Mints that skip only the liquidity rule; every other check still applies. Rugcheck counts a
+ * token's liquidity from pools where it is the BASE token, so a token that is nearly always the
+ * QUOTE side reports none at all: wrapped SOL (WIF/SOL, BONK/SOL, ...) comes back with 0 markets
+ * and $0 liquidity although it is the deepest token on Solana. Keep this list to such tokens.
+ */
+export const LIQUIDITY_RULE_EXEMPT_MINTS: ReadonlySet<string> = new Set([
+  "So11111111111111111111111111111111111111112", // wrapped SOL
+]);
+
+/**
  * refresh=true makes Rugcheck rescan: 4-30s for large tokens, and over 30s (JUP, WIF, TRUMP)
  * when 15 ran at once. Timeouts are not retried, so a check takes at most ~50s.
  */
@@ -90,7 +100,7 @@ export function lpLockedPctFromMarkets(markets: unknown): number | null {
 }
 
 /** Applies the rules to a /report response. Missing data fails closed. */
-export function evaluateRugcheck(report: RugcheckReport): TokenSafety {
+export function evaluateRugcheck(report: RugcheckReport, tokenMint?: string): TokenSafety {
   const reasons: string[] = [];
   const warnings: string[] = [];
   const token = report.token;
@@ -112,7 +122,8 @@ export function evaluateRugcheck(report: RugcheckReport): TokenSafety {
   const totalLiquidityUsd = isNum(report.totalMarketLiquidity) ? report.totalMarketLiquidity : null;
   const deep = totalLiquidityUsd !== null && totalLiquidityUsd >= RUGCHECK_RULES.minLiquidityUsdUnlocked;
   const locked = lpLockedPct !== null && lpLockedPct >= RUGCHECK_RULES.minLpLockedPct;
-  if (!deep && !locked) {
+  const exempt = tokenMint !== undefined && LIQUIDITY_RULE_EXEMPT_MINTS.has(tokenMint);
+  if (!deep && !locked && !exempt) {
     const lockedText = lpLockedPct === null
       ? "Locked liquidity unavailable"
       : `Only ${lpLockedPct.toFixed(1)}% of liquidity is locked (minimum ${RUGCHECK_RULES.minLpLockedPct}%)`;
@@ -171,5 +182,5 @@ export async function checkTokenSafety(
     await sleepFn(honoured ? retryAfterMs : RETRY_DELAYS_MS[attempt]);
   }
   if (!response.ok) throw new Error(`rugcheck report: HTTP ${response.status}`);
-  return evaluateRugcheck(await response.json() as RugcheckReport);
+  return evaluateRugcheck(await response.json() as RugcheckReport, tokenMint);
 }

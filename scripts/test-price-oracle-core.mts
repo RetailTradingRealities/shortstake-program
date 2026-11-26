@@ -19,7 +19,7 @@ import {
 } from '../supabase/functions/price-oracle/core.ts';
 import { fetchSignedPrice, getSignedPriceInstruction, getSignedPriceMessage } from '../app/src/oracle/signedPrice.ts';
 import { fetchBirdeye, fetchCoinGecko, fetchDexScreener, resetCoinGeckoListingCache, type FetchFn } from '../supabase/functions/price-oracle/sources.ts';
-import { RUGCHECK_RULES, SPL_TOKEN_PROGRAM, checkTokenSafety, evaluateRugcheck, lpLockedPctFromMarkets } from '../supabase/functions/price-oracle/rugcheck.ts';
+import { LIQUIDITY_RULE_EXEMPT_MINTS, RUGCHECK_RULES, SPL_TOKEN_PROGRAM, checkTokenSafety, evaluateRugcheck, lpLockedPctFromMarkets } from '../supabase/functions/price-oracle/rugcheck.ts';
 
 const NOW = 1_760_000_000;
 const q = (source: SourceQuote['source'], priceUsd: number, extra: Partial<SourceQuote> = {}): SourceQuote => ({
@@ -465,6 +465,27 @@ const birdeyeOk = {
   assert.match(reasonsFor({ markets: unlocked, totalMarketLiquidity: '5000000' })[0], /total liquidity unavailable/);
   assert.match(reasonsFor({ risks: undefined })[0], /Risk findings unavailable/);
   assert.match(reasonsFor({ token: null })[0], /no token data/);
+
+  // Wrapped SOL skips only the liquidity rule: Rugcheck lists no markets for it (it is the quote
+  // side of its pools). Shape of its live report on 2026-11-26.
+  const WSOL = 'So11111111111111111111111111111111111111112';
+  assert.ok(LIQUIDITY_RULE_EXEMPT_MINTS.has(WSOL));
+  const wsolReport = {
+    ...goodReport,
+    score_normalised: 1,
+    totalMarketLiquidity: 0,
+    markets: [],
+    token: { mintAuthority: null, freezeAuthority: null },
+  };
+  assert.match(evaluateRugcheck(wsolReport).reasons[0], /Locked liquidity unavailable/, 'no mint given: rule applies');
+  assert.match(evaluateRugcheck(wsolReport, 'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm').reasons[0], /Locked liquidity unavailable/, 'other mints: rule applies');
+  const wsol = evaluateRugcheck(wsolReport, WSOL);
+  assert.equal(wsol.eligible, true);
+  assert.deepEqual(wsol.reasons, []);
+  // ...but every other check still applies to it.
+  assert.match(evaluateRugcheck({ ...wsolReport, rugged: true }, WSOL).reasons[0], /rugged/);
+  assert.match(evaluateRugcheck({ ...wsolReport, score_normalised: 80 }, WSOL).reasons[0], /Risk score 80/);
+  assert.match(evaluateRugcheck({ ...wsolReport, risks: [{ name: 'x', level: 'danger' }] }, WSOL).reasons[0], /Danger: x/);
 
   // Token program and authorities warn but never reject.
   const usdcLike = evaluateRugcheck(
