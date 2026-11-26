@@ -25,9 +25,19 @@ liquidators can read exactly what runs.
 | Oracle signer | `gyNUZv6Au6ZPDPGEsZ8VDEy5YxxSuQ28zEjseqTW82h` |
 | Program (devnet, testing) | `G6zjYNx2LurrRnYWJZmvScUYQ1oavBfRkGWoDrcCWWVQ` |
 
-**Verified build:** not yet. The mainnet program was built with `anchor build`. A
-[`solana-verify`](https://github.com/Ellipsis-Labs/solana-verifiable-build) build is planned as a
-later upgrade. Once it lands, explorers will show that the on-chain program matches this source.
+**Verified build:** yes. The mainnet program is a
+[`solana-verify`](https://github.com/Ellipsis-Labs/solana-verifiable-build) build of commit
+`920de12`, verified by OtterSec on 26 November 2026, so explorers can show it as verified. The
+on-chain program hash `d838923bde12e527e419c1f91fe9c8cd010b734d3ba4e4b9f9ee47ffdc184e07`
+matches a build of this source. To check it yourself:
+
+```bash
+solana-verify verify-from-repo --program-id sstowRTr15wR623yz3cUTRXJf8YhjgPBJ2TKBvNyZA3 \
+  --commit-hash 920de12b63c27dc9c208d3bb34871803513d52d6 \
+  --library-name short_stake001 \
+  --base-image solanafoundation/solana-verifiable-build:3.1.10 \
+  https://github.com/RetailTradingRealities/shortstake-program
+```
 
 ## What's here
 
